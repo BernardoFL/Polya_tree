@@ -1,9 +1,8 @@
 #### Polya tree
 library(usedist)
-library(reshape2)
+library(mvtnorm)
 
 data <- read.table('~/Downloads/osr.txt', header=T)
-colnames(data)[2:3] <- c("n+", "n-")
 # split each row into two
 
 data <- as.matrix(data)
@@ -20,8 +19,26 @@ df <- as.data.frame(df)
 df[,2:5] <- apply(df[,2:5], 2, as.numeric)
 #df[,c(1,6)] <- apply(df[,c(1,6)], 2, as.factor) 
 
-ham_dist <- function(x,y){
-    sum( x[] != y)
+# This gets the l2 product metric using the Hamming distance for k and the
+# biomarker and the l2 metric for the quantiles and sample size.
+# TO TRY: weight the distances
+
+prod_dist <- function(x,y) {
+   dist(rbind(sum( x[c(1,6)] != y[c(1,6)]), dist(rbind(x[2:5], y[2:5]))))
 }
 
-hclust(dist_make(data, ham_dist))
+
+
+# Create tree and obtain a matrix of assignments
+tree <- hclust(dist_make(na.pass(df), prod_dist))
+clust <- cutree(tree, 1:nrow(df))
+
+# Generate random effects
+pesos <- matrix(0, nrow(df), 2)
+for(k in seq(1, nrow(df)-1, 2)) {
+    sigma <- rbind(c(30/log(k+1), 0), c(0, 20/log(k+1)))
+    zkm_1 <- rmvnorm(k, sigma=sigma,  checkSymmetry = F)
+    zkm_2 <- rmvnorm(k+1, sigma = sigma, checkSymmetry = F)
+    pesos[k,] <- pesos[k,] + zkm_1[clust[c(k,k+1),k]] + zkm_2[clust[c(k,k+1),k+1]] #where are the biomarker pairs in clust
+}
+
