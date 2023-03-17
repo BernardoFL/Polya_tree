@@ -3,7 +3,7 @@ using DataFrames, Distributions, LinearAlgebra, Plots
 import CSV
 include("tree_struc.jl")
 
-#Read data and 
+#Read data and filter
 data = DataFrame(CSV.File("/Users/bernardo/Desktop/latents.csv"))
 select!(data, Not(:Column1))
 
@@ -22,7 +22,7 @@ end
 
 
 function get_curves(x, sigma)
-    [y -> pdf(MultivariateNormal(row, sigma), y) for row in eachrow(x)]
+    [y -> pdf(MultivariateNormal([row.Lat1, row.Lat2], sigma), y) for row in eachrow(x)]
 end
 
 function eval_funcs(funcs, x)
@@ -63,6 +63,9 @@ end
 function rarea(n, x, alpha0, alpha1, sigma)
     ##### Sample uniformly in rectangle. Get a Dirichlet process on it and see for each x the mass it puts on the area
     curvas = get_curves(x, sigma)
+
+    x = select(x, :Lat1, :Lat2) |> Matrix
+
     mx_wind =  alpha0 * curvas[1](x[1,:])
     min_wind = -alpha1 * curvas[1](x[1,:])
 
@@ -128,45 +131,47 @@ function area_prob(curva, points::DataFrame, α₀, α₁, inter::Vector{Float64
 end
 
 
-function area_prob(curva, x, αₘ::Integer, α₀, α₁, inter::Vector{Float64}, sigma)
+function area_prob(curva, x, αₘ::Float64, α₀, α₁, inter::Vector{Float64}, sigma)
     length(inter) == 2 || throw(ArgumentError("The interval needs to have two elements"))
 
-    points = polya_urn(5000, select(x, :Lat1, :Lat2), αₘ, α₀, α₁, sigma)
+    points = polya_urn(5000, x, αₘ, α₀, α₁, sigma)
+
     num1 = count(p -> -α₁ * curva([p.h, p.v]) ≤ p.z ≤ α₀ * curva([p.h, p.v]) && inter[1] ≤ p.th ≤ inter[2], eachrow(points))
     num2 = count(p -> 0 ≤ p.z ≤ α₀ * curva([p.h, p.v]) && inter[1] ≤ p.th ≤ inter[2], eachrow(points))
     return num1 / (num1 + num2)
 end
 #@enter area_prob([1 1; 2 2], 1, 3, 1,1,1,1)
-intento = polya_urn(5, x, 1, 1, 1, [1 0; 0 1]) 
+#intento = polya_urn(5, x, 1, 1, 1, [1 0; 0 1]) 
 
 #Note: the partition sequence is indeed fixed, rn centered around the Lebesgue measure
 # to do: fix the probs = thing, get matrix of probabilities. Figure out how to trace back the leaves to get the final probabilities.
 ##use tree_struc.jl to store the trees
 function grow_trees(nlevels, x, αₘ::Function, α₀, α₁, sigma)
+    nlevels ≥ 3 || throw(BoundsError("nlevels must be at least 3!"))
     #instansiate trees
     curvas = get_curves(x, sigma)
     
     ## Create trees for each thing
     forest = Vector{Tree}(undef, nrow(x))
     for i in 1:length(forest)
-        function get_probs(inter, m) 
-            area_prob(curvas[i], x, αₘ(m), α₀, α₁, inter, sigma)
+        function get_probs(inter, m, x) 
+            area_prob(curvas[i], x, αₘ(convert(Float64, m)), α₀, α₁, inter, sigma) 
         end
-        forest[i] = Tree(get_probs, collect(select(x[i,:], :low, :median, :hi)))
+        forest[i] = Tree(get_probs, x[i, [:lo, :median, :hi]], x)
     end
-    forest = [Tree(inter -> area_prob(curvas[i], points, α₀, α₁, inter), collect(select(x[i,:], :low, :median, :hi))) for i in 1:nrow(x)]
-    for i in 2:nlevels
-        points = polya_urn(5000, select(x, :Lat1, :Lat2), αₘ, α₀, α₁, sigma) # 1 DP for each level
+   # forest = [Tree(inter -> area_prob(curvas[i], points, α₀, α₁, inter), collect(select(x[i,:], :low, :median, :hi))) for i in 1:nrow(x)]
+   for i in 2:nlevels
+        points = polya_urn(1000, select(x, :Lat1, :Lat2), αₘ(i), α₀, α₁, sigma) # 1 DP for each level
 
         #levels are horizontal, trees vertical
         #probs = [area_prob(xi, j, i, α₀, α₁, αₘ, sigma) for j in nodes_in_level, xi in x]
         #probs = hcat(probs...)
             for tree in eachindex(forest)
-                nodes_in_level = findall(x -> x.level == i-1, forest[tree])  #find all the nodes to split
+                nodes_in_level = findall(x -> x.level == i-1, forest[tree].nodes)  #find all the nodes to split
                 for j in nodes_in_level 
-                    inter = forest[tree][j].inter
+                    inter = forest[tree].nodes[j].inter
                     y = area_prob(curvas[tree], points, α₀, α₁, [inter[1], mean(inter)]) # <- add the interval here
-                    split_node!(tree, j, y)
+                    split_node!(forest[tree], j, y)
             end
         end
     end 
@@ -179,7 +184,7 @@ plot_mvpdf(MvNormal([2, 2], I))
 puntos = polya_urn(1000, [1 1; 2 2], 1, 1, 1, [1 0; 0 1])
 scatter(puntos.h, puntos.v, puntos.z)
 
-
+grow_trees(3, data, m -> 2^(-float(m)), 1, 1, 1)
  #Plots.CURRENT_PLOT.nullableplot = nothing
 plot((x,y) -> pdf(MultivariateNormal([0,0],I), [x,y]))
 # at the end for the summary get the initial partition back. Probably add the partition as an attribute
